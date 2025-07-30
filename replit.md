@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a full-stack photography portfolio management system built with Express.js backend and React frontend. The application allows photographers to showcase their work in organized galleries, manage photo uploads, handle contact inquiries, and provides an admin dashboard for content management. It features Replit authentication for secure admin access and a responsive design using shadcn/ui components.
+This is a full-stack photography portfolio management system built with Express.js backend and React frontend. The application allows photographers to showcase their work in organized galleries, manage photo uploads, handle contact inquiries, and provides an admin dashboard for content management. It features Firebase database with JWT-based username/password authentication for secure admin access and a responsive design using shadcn/ui components.
 
 ## User Preferences
 
@@ -12,10 +12,10 @@ Preferred communication style: Simple, everyday language.
 
 ### Backend Architecture
 - **Express.js Server**: RESTful API with middleware for authentication, logging, and error handling
-- **Database Layer**: PostgreSQL with Drizzle ORM for type-safe database operations
-- **Authentication**: Replit OpenID Connect integration with session management
+- **Database Layer**: Firebase Firestore for NoSQL document storage
+- **Authentication**: JWT-based username/password authentication with bcrypt password hashing
 - **File Storage**: Local file system with image processing via Sharp for optimization
-- **Session Management**: PostgreSQL-backed sessions using connect-pg-simple
+- **Session Management**: JWT tokens stored in localStorage for client-side authentication
 
 ### Frontend Architecture
 - **React SPA**: Single-page application using Wouter for client-side routing

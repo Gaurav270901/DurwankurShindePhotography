@@ -1,10 +1,6 @@
 import {
-  users,
-  sections,
-  photos,
-  contactMessages,
   type User,
-  type UpsertUser,
+  type InsertUser,
   type Section,
   type InsertSection,
   type Photo,
@@ -14,13 +10,15 @@ import {
   type SectionWithPhotos,
   type PhotoWithSection,
 } from "@shared/schema";
-import { db } from "./db";
-import { eq, desc, asc } from "drizzle-orm";
+import { getDb } from "./firebase";
+import { nanoid } from "nanoid";
 
 export interface IStorage {
-  // User operations (mandatory for Replit Auth)
+  // User operations
   getUser(id: string): Promise<User | undefined>;
-  upsertUser(user: UpsertUser): Promise<User>;
+  getUserByUsername(username: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  updateUser(id: string, user: Partial<InsertUser>): Promise<User>;
 
   // Section operations
   getSections(): Promise<Section[]>;
@@ -53,183 +51,420 @@ export interface IStorage {
   }>;
 }
 
-export class DatabaseStorage implements IStorage {
+export class FirebaseStorage implements IStorage {
+  private db = getDb();
+
   // User operations
   async getUser(id: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.id, id));
-    return user;
+    try {
+      const doc = await this.db.collection('users').doc(id).get();
+      if (!doc.exists) return undefined;
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        createdAt: data?.createdAt?.toDate() || new Date(),
+        updatedAt: data?.updatedAt?.toDate() || new Date(),
+      } as User;
+    } catch (error) {
+      console.error('Error getting user:', error);
+      return undefined;
+    }
   }
 
-  async upsertUser(userData: UpsertUser): Promise<User> {
-    const [user] = await db
-      .insert(users)
-      .values(userData)
-      .onConflictDoUpdate({
-        target: users.id,
-        set: {
-          ...userData,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
-    return user;
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    try {
+      const snapshot = await this.db.collection('users').where('username', '==', username).limit(1).get();
+      if (snapshot.empty) return undefined;
+      const doc = snapshot.docs[0];
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        createdAt: data?.createdAt?.toDate() || new Date(),
+        updatedAt: data?.updatedAt?.toDate() || new Date(),
+      } as User;
+    } catch (error) {
+      console.error('Error getting user by username:', error);
+      return undefined;
+    }
+  }
+
+  async createUser(user: InsertUser): Promise<User> {
+    try {
+      const id = nanoid();
+      const now = new Date();
+      const userData = {
+        ...user,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await this.db.collection('users').doc(id).set(userData);
+      return { id, ...userData };
+    } catch (error) {
+      console.error('Error creating user:', error);
+      throw new Error('Failed to create user');
+    }
+  }
+
+  async updateUser(id: string, user: Partial<InsertUser>): Promise<User> {
+    try {
+      const updateData = {
+        ...user,
+        updatedAt: new Date(),
+      };
+      await this.db.collection('users').doc(id).update(updateData);
+      const updatedUser = await this.getUser(id);
+      if (!updatedUser) throw new Error('User not found after update');
+      return updatedUser;
+    } catch (error) {
+      console.error('Error updating user:', error);
+      throw new Error('Failed to update user');
+    }
   }
 
   // Section operations
   async getSections(): Promise<Section[]> {
-    return await db.select().from(sections).orderBy(asc(sections.order), asc(sections.name));
+    try {
+      const snapshot = await this.db.collection('sections').orderBy('order', 'asc').orderBy('name', 'asc').get();
+      return snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate() || new Date(),
+          updatedAt: data.updatedAt?.toDate() || new Date(),
+        } as Section;
+      });
+    } catch (error) {
+      console.error('Error getting sections:', error);
+      return [];
+    }
   }
 
   async getSectionBySlug(slug: string): Promise<SectionWithPhotos | undefined> {
-    const [section] = await db.select().from(sections).where(eq(sections.slug, slug));
-    if (!section) return undefined;
+    try {
+      const sectionSnapshot = await this.db.collection('sections').where('slug', '==', slug).limit(1).get();
+      if (sectionSnapshot.empty) return undefined;
+      
+      const sectionDoc = sectionSnapshot.docs[0];
+      const sectionData = sectionDoc.data();
+      const section = {
+        id: sectionDoc.id,
+        ...sectionData,
+        createdAt: sectionData.createdAt?.toDate() || new Date(),
+        updatedAt: sectionData.updatedAt?.toDate() || new Date(),
+      } as Section;
 
-    const sectionPhotos = await db
-      .select()
-      .from(photos)
-      .where(eq(photos.sectionId, section.id))
-      .orderBy(asc(photos.order), desc(photos.createdAt));
+      const photosSnapshot = await this.db.collection('photos')
+        .where('sectionId', '==', section.id)
+        .orderBy('order', 'asc')
+        .orderBy('createdAt', 'desc')
+        .get();
 
-    return {
-      ...section,
-      photos: sectionPhotos,
-    };
+      const photos = photosSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate() || new Date(),
+          updatedAt: data.updatedAt?.toDate() || new Date(),
+        } as Photo;
+      });
+
+      return { ...section, photos };
+    } catch (error) {
+      console.error('Error getting section by slug:', error);
+      return undefined;
+    }
   }
 
   async createSection(section: InsertSection): Promise<Section> {
-    const [newSection] = await db.insert(sections).values(section).returning();
-    return newSection;
+    try {
+      const id = nanoid();
+      const now = new Date();
+      const sectionData = {
+        ...section,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await this.db.collection('sections').doc(id).set(sectionData);
+      return { id, ...sectionData };
+    } catch (error) {
+      console.error('Error creating section:', error);
+      throw new Error('Failed to create section');
+    }
   }
 
   async updateSection(id: string, section: Partial<InsertSection>): Promise<Section> {
-    const [updatedSection] = await db
-      .update(sections)
-      .set({ ...section, updatedAt: new Date() })
-      .where(eq(sections.id, id))
-      .returning();
-    return updatedSection;
+    try {
+      const updateData = {
+        ...section,
+        updatedAt: new Date(),
+      };
+      await this.db.collection('sections').doc(id).update(updateData);
+      const doc = await this.db.collection('sections').doc(id).get();
+      if (!doc.exists) throw new Error('Section not found');
+      const data = doc.data()!;
+      return {
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate() || new Date(),
+        updatedAt: data.updatedAt?.toDate() || new Date(),
+      } as Section;
+    } catch (error) {
+      console.error('Error updating section:', error);
+      throw new Error('Failed to update section');
+    }
   }
 
   async deleteSection(id: string): Promise<void> {
-    await db.delete(sections).where(eq(sections.id, id));
+    try {
+      await this.db.collection('sections').doc(id).delete();
+    } catch (error) {
+      console.error('Error deleting section:', error);
+      throw new Error('Failed to delete section');
+    }
   }
 
   // Photo operations
   async getPhotos(): Promise<PhotoWithSection[]> {
-    return await db
-      .select({
-        id: photos.id,
-        title: photos.title,
-        description: photos.description,
-        filename: photos.filename,
-        originalFilename: photos.originalFilename,
-        mimeType: photos.mimeType,
-        fileSize: photos.fileSize,
-        width: photos.width,
-        height: photos.height,
-        sectionId: photos.sectionId,
-        tags: photos.tags,
-        isPublished: photos.isPublished,
-        order: photos.order,
-        views: photos.views,
-        createdAt: photos.createdAt,
-        updatedAt: photos.updatedAt,
-        section: sections,
-      })
-      .from(photos)
-      .leftJoin(sections, eq(photos.sectionId, sections.id))
-      .orderBy(desc(photos.createdAt));
+    try {
+      const photosSnapshot = await this.db.collection('photos').orderBy('createdAt', 'desc').get();
+      const photos: PhotoWithSection[] = [];
+
+      for (const doc of photosSnapshot.docs) {
+        const data = doc.data();
+        const photo = {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate() || new Date(),
+          updatedAt: data.updatedAt?.toDate() || new Date(),
+        } as Photo;
+
+        let section: Section | null = null;
+        if (photo.sectionId) {
+          const sectionDoc = await this.db.collection('sections').doc(photo.sectionId).get();
+          if (sectionDoc.exists) {
+            const sectionData = sectionDoc.data()!;
+            section = {
+              id: sectionDoc.id,
+              ...sectionData,
+              createdAt: sectionData.createdAt?.toDate() || new Date(),
+              updatedAt: sectionData.updatedAt?.toDate() || new Date(),
+            } as Section;
+          }
+        }
+
+        photos.push({ ...photo, section });
+      }
+
+      return photos;
+    } catch (error) {
+      console.error('Error getting photos:', error);
+      return [];
+    }
   }
 
   async getPhotosBySection(sectionId: string): Promise<Photo[]> {
-    return await db
-      .select()
-      .from(photos)
-      .where(eq(photos.sectionId, sectionId))
-      .orderBy(asc(photos.order), desc(photos.createdAt));
+    try {
+      const snapshot = await this.db.collection('photos')
+        .where('sectionId', '==', sectionId)
+        .orderBy('order', 'asc')
+        .orderBy('createdAt', 'desc')
+        .get();
+
+      return snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate() || new Date(),
+          updatedAt: data.updatedAt?.toDate() || new Date(),
+        } as Photo;
+      });
+    } catch (error) {
+      console.error('Error getting photos by section:', error);
+      return [];
+    }
   }
 
   async getPublishedPhotos(): Promise<PhotoWithSection[]> {
-    return await db
-      .select({
-        id: photos.id,
-        title: photos.title,
-        description: photos.description,
-        filename: photos.filename,
-        originalFilename: photos.originalFilename,
-        mimeType: photos.mimeType,
-        fileSize: photos.fileSize,
-        width: photos.width,
-        height: photos.height,
-        sectionId: photos.sectionId,
-        tags: photos.tags,
-        isPublished: photos.isPublished,
-        order: photos.order,
-        views: photos.views,
-        createdAt: photos.createdAt,
-        updatedAt: photos.updatedAt,
-        section: sections,
-      })
-      .from(photos)
-      .leftJoin(sections, eq(photos.sectionId, sections.id))
-      .where(eq(photos.isPublished, true))
-      .orderBy(asc(photos.order), desc(photos.createdAt));
+    try {
+      const photosSnapshot = await this.db.collection('photos')
+        .where('isPublished', '==', true)
+        .orderBy('order', 'asc')
+        .orderBy('createdAt', 'desc')
+        .get();
+
+      const photos: PhotoWithSection[] = [];
+
+      for (const doc of photosSnapshot.docs) {
+        const data = doc.data();
+        const photo = {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate() || new Date(),
+          updatedAt: data.updatedAt?.toDate() || new Date(),
+        } as Photo;
+
+        let section: Section | null = null;
+        if (photo.sectionId) {
+          const sectionDoc = await this.db.collection('sections').doc(photo.sectionId).get();
+          if (sectionDoc.exists) {
+            const sectionData = sectionDoc.data()!;
+            section = {
+              id: sectionDoc.id,
+              ...sectionData,
+              createdAt: sectionData.createdAt?.toDate() || new Date(),
+              updatedAt: sectionData.updatedAt?.toDate() || new Date(),
+            } as Section;
+          }
+        }
+
+        photos.push({ ...photo, section });
+      }
+
+      return photos;
+    } catch (error) {
+      console.error('Error getting published photos:', error);
+      return [];
+    }
   }
 
   async getPublishedPhotosBySection(sectionSlug: string): Promise<Photo[]> {
-    const [section] = await db.select().from(sections).where(eq(sections.slug, sectionSlug));
-    if (!section) return [];
+    try {
+      const sectionSnapshot = await this.db.collection('sections').where('slug', '==', sectionSlug).limit(1).get();
+      if (sectionSnapshot.empty) return [];
 
-    return await db
-      .select()
-      .from(photos)
-      .where(eq(photos.sectionId, section.id))
-      .orderBy(asc(photos.order), desc(photos.createdAt));
+      const sectionId = sectionSnapshot.docs[0].id;
+      const photosSnapshot = await this.db.collection('photos')
+        .where('sectionId', '==', sectionId)
+        .where('isPublished', '==', true)
+        .orderBy('order', 'asc')
+        .orderBy('createdAt', 'desc')
+        .get();
+
+      return photosSnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate() || new Date(),
+          updatedAt: data.updatedAt?.toDate() || new Date(),
+        } as Photo;
+      });
+    } catch (error) {
+      console.error('Error getting published photos by section:', error);
+      return [];
+    }
   }
 
   async createPhoto(photo: InsertPhoto): Promise<Photo> {
-    const [newPhoto] = await db.insert(photos).values(photo).returning();
-    return newPhoto;
+    try {
+      const id = nanoid();
+      const now = new Date();
+      const photoData = {
+        ...photo,
+        views: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await this.db.collection('photos').doc(id).set(photoData);
+      return { id, ...photoData };
+    } catch (error) {
+      console.error('Error creating photo:', error);
+      throw new Error('Failed to create photo');
+    }
   }
 
   async updatePhoto(id: string, photo: Partial<InsertPhoto>): Promise<Photo> {
-    const [updatedPhoto] = await db
-      .update(photos)
-      .set({ ...photo, updatedAt: new Date() })
-      .where(eq(photos.id, id))
-      .returning();
-    return updatedPhoto;
+    try {
+      const updateData = {
+        ...photo,
+        updatedAt: new Date(),
+      };
+      await this.db.collection('photos').doc(id).update(updateData);
+      const doc = await this.db.collection('photos').doc(id).get();
+      if (!doc.exists) throw new Error('Photo not found');
+      const data = doc.data()!;
+      return {
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate() || new Date(),
+        updatedAt: data.updatedAt?.toDate() || new Date(),
+      } as Photo;
+    } catch (error) {
+      console.error('Error updating photo:', error);
+      throw new Error('Failed to update photo');
+    }
   }
 
   async deletePhoto(id: string): Promise<void> {
-    await db.delete(photos).where(eq(photos.id, id));
+    try {
+      await this.db.collection('photos').doc(id).delete();
+    } catch (error) {
+      console.error('Error deleting photo:', error);
+      throw new Error('Failed to delete photo');
+    }
   }
 
   async incrementPhotoViews(id: string): Promise<void> {
-    await db
-      .update(photos)
-      .set({ views: sql`views + 1` })
-      .where(eq(photos.id, id));
+    try {
+      const photoRef = this.db.collection('photos').doc(id);
+      await this.db.runTransaction(async (transaction) => {
+        const doc = await transaction.get(photoRef);
+        if (doc.exists) {
+          const currentViews = doc.data()?.views || 0;
+          transaction.update(photoRef, { views: currentViews + 1 });
+        }
+      });
+    } catch (error) {
+      console.error('Error incrementing photo views:', error);
+    }
   }
 
   // Contact message operations
   async getContactMessages(): Promise<ContactMessage[]> {
-    return await db
-      .select()
-      .from(contactMessages)
-      .orderBy(desc(contactMessages.createdAt));
+    try {
+      const snapshot = await this.db.collection('contactMessages').orderBy('createdAt', 'desc').get();
+      return snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          createdAt: data.createdAt?.toDate() || new Date(),
+        } as ContactMessage;
+      });
+    } catch (error) {
+      console.error('Error getting contact messages:', error);
+      return [];
+    }
   }
 
   async createContactMessage(message: InsertContactMessage): Promise<ContactMessage> {
-    const [newMessage] = await db.insert(contactMessages).values(message).returning();
-    return newMessage;
+    try {
+      const id = nanoid();
+      const messageData = {
+        ...message,
+        isRead: false,
+        createdAt: new Date(),
+      };
+      await this.db.collection('contactMessages').doc(id).set(messageData);
+      return { id, ...messageData };
+    } catch (error) {
+      console.error('Error creating contact message:', error);
+      throw new Error('Failed to create contact message');
+    }
   }
 
   async markMessageAsRead(id: string): Promise<void> {
-    await db
-      .update(contactMessages)
-      .set({ isRead: true })
-      .where(eq(contactMessages.id, id));
+    try {
+      await this.db.collection('contactMessages').doc(id).update({ isRead: true });
+    } catch (error) {
+      console.error('Error marking message as read:', error);
+      throw new Error('Failed to mark message as read');
+    }
   }
 
   // Statistics
@@ -239,30 +474,35 @@ export class DatabaseStorage implements IStorage {
     totalViews: number;
     newMessages: number;
   }> {
-    const [photoCount] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(photos);
+    try {
+      const [photosSnapshot, sectionsSnapshot, messagesSnapshot] = await Promise.all([
+        this.db.collection('photos').get(),
+        this.db.collection('sections').get(),
+        this.db.collection('contactMessages').where('isRead', '==', false).get(),
+      ]);
 
-    const [sectionCount] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(sections);
+      let totalViews = 0;
+      photosSnapshot.docs.forEach(doc => {
+        const data = doc.data();
+        totalViews += data.views || 0;
+      });
 
-    const [viewsSum] = await db
-      .select({ sum: sql<number>`coalesce(sum(views), 0)` })
-      .from(photos);
-
-    const [unreadMessages] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(contactMessages)
-      .where(eq(contactMessages.isRead, false));
-
-    return {
-      totalPhotos: photoCount.count,
-      totalSections: sectionCount.count,
-      totalViews: viewsSum.sum,
-      newMessages: unreadMessages.count,
-    };
+      return {
+        totalPhotos: photosSnapshot.size,
+        totalSections: sectionsSnapshot.size,
+        totalViews,
+        newMessages: messagesSnapshot.size,
+      };
+    } catch (error) {
+      console.error('Error getting stats:', error);
+      return {
+        totalPhotos: 0,
+        totalSections: 0,
+        totalViews: 0,
+        newMessages: 0,
+      };
+    }
   }
 }
 
-export const storage = new DatabaseStorage();
+export const storage = new FirebaseStorage();

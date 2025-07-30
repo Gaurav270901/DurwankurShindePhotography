@@ -6,10 +6,10 @@ import { Camera, LogOut, BarChart3, Users } from "lucide-react";
 import { Link } from "wouter";
 
 export default function Home() {
-  const { user } = useAuth();
+  const { user, logoutMutation } = useAuth();
 
   const handleLogout = () => {
-    window.location.href = "/api/logout";
+    logoutMutation.mutate();
   };
 
   return (
@@ -24,7 +24,7 @@ export default function Home() {
               <Camera className="h-12 w-12 text-accent mr-4" />
               <div>
                 <h1 className="text-4xl font-bold text-gray-900">
-                  Welcome back, {user?.firstName || 'Admin'}!
+                  Welcome back, {user?.firstName || user?.username || 'Admin'}!
                 </h1>
                 <p className="text-lg text-gray-600 mt-2">
                   Manage your photography portfolio

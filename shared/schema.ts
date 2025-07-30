@@ -1,126 +1,116 @@
-import { sql } from 'drizzle-orm';
-import {
-  index,
-  jsonb,
-  pgTable,
-  timestamp,
-  varchar,
-  text,
-  integer,
-  boolean,
-} from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
-import { relations } from "drizzle-orm";
 
-// Session storage table for Replit Auth
-export const sessions = pgTable(
-  "sessions",
-  {
-    sid: varchar("sid").primaryKey(),
-    sess: jsonb("sess").notNull(),
-    expire: timestamp("expire").notNull(),
-  },
-  (table) => [index("IDX_session_expire").on(table.expire)],
-);
-
-// User storage table for Replit Auth
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: varchar("email").unique(),
-  firstName: varchar("first_name"),
-  lastName: varchar("last_name"),
-  profileImageUrl: varchar("profile_image_url"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
+// User interface for Firebase
+export interface User {
+  id: string;
+  username: string;
+  email: string;
+  password: string;
+  firstName?: string;
+  lastName?: string;
+  profileImageUrl?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 // Photography sections (categories)
-export const sections = pgTable("sections", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  name: varchar("name", { length: 255 }).notNull(),
-  slug: varchar("slug", { length: 255 }).notNull().unique(),
-  description: text("description"),
-  isActive: boolean("is_active").default(true),
-  order: integer("order").default(0),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
+export interface Section {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  isActive: boolean;
+  order: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 // Photography images
-export const photos = pgTable("photos", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  title: varchar("title", { length: 255 }).notNull(),
-  description: text("description"),
-  filename: varchar("filename", { length: 255 }).notNull(),
-  originalFilename: varchar("original_filename", { length: 255 }).notNull(),
-  mimeType: varchar("mime_type", { length: 100 }).notNull(),
-  fileSize: integer("file_size").notNull(),
-  width: integer("width"),
-  height: integer("height"),
-  sectionId: varchar("section_id").references(() => sections.id, { onDelete: "cascade" }),
-  tags: text("tags").array().default([]),
-  isPublished: boolean("is_published").default(true),
-  order: integer("order").default(0),
-  views: integer("views").default(0),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
+export interface Photo {
+  id: string;
+  title: string;
+  description?: string;
+  filename: string;
+  originalFilename: string;
+  mimeType: string;
+  fileSize: number;
+  width?: number;
+  height?: number;
+  sectionId?: string;
+  tags: string[];
+  isPublished: boolean;
+  order: number;
+  views: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 // Contact form messages
-export const contactMessages = pgTable("contact_messages", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  firstName: varchar("first_name", { length: 255 }).notNull(),
-  lastName: varchar("last_name", { length: 255 }).notNull(),
-  email: varchar("email", { length: 255 }).notNull(),
-  phone: varchar("phone", { length: 50 }),
-  service: varchar("service", { length: 100 }),
-  message: text("message").notNull(),
-  isRead: boolean("is_read").default(false),
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-// Relations
-export const sectionsRelations = relations(sections, ({ many }) => ({
-  photos: many(photos),
-}));
-
-export const photosRelations = relations(photos, ({ one }) => ({
-  section: one(sections, {
-    fields: [photos.sectionId],
-    references: [sections.id],
-  }),
-}));
+export interface ContactMessage {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone?: string;
+  service?: string;
+  message: string;
+  isRead: boolean;
+  createdAt: Date;
+}
 
 // Insert schemas
-export const insertSectionSchema = createInsertSchema(sections).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
+export const insertUserSchema = z.object({
+  username: z.string().min(3).max(50),
+  email: z.string().email(),
+  password: z.string().min(6),
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
+  profileImageUrl: z.string().optional(),
 });
 
-export const insertPhotoSchema = createInsertSchema(photos).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  views: true,
+export const insertSectionSchema = z.object({
+  name: z.string().min(1).max(255),
+  slug: z.string().min(1).max(255),
+  description: z.string().optional(),
+  isActive: z.boolean().default(true),
+  order: z.number().default(0),
 });
 
-export const insertContactMessageSchema = createInsertSchema(contactMessages).omit({
-  id: true,
-  createdAt: true,
-  isRead: true,
+export const insertPhotoSchema = z.object({
+  title: z.string().min(1).max(255),
+  description: z.string().optional(),
+  filename: z.string().min(1).max(255),
+  originalFilename: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(100),
+  fileSize: z.number().min(1),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  sectionId: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+  isPublished: z.boolean().default(true),
+  order: z.number().default(0),
+});
+
+export const insertContactMessageSchema = z.object({
+  firstName: z.string().min(1).max(255),
+  lastName: z.string().min(1).max(255),
+  email: z.string().email().max(255),
+  phone: z.string().max(50).optional(),
+  service: z.string().max(100).optional(),
+  message: z.string().min(1),
+});
+
+export const loginSchema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
 });
 
 // Types
-export type UpsertUser = typeof users.$inferInsert;
-export type User = typeof users.$inferSelect;
-export type Section = typeof sections.$inferSelect;
+export type InsertUser = z.infer<typeof insertUserSchema>;
 export type InsertSection = z.infer<typeof insertSectionSchema>;
-export type Photo = typeof photos.$inferSelect;
 export type InsertPhoto = z.infer<typeof insertPhotoSchema>;
-export type ContactMessage = typeof contactMessages.$inferSelect;
 export type InsertContactMessage = z.infer<typeof insertContactMessageSchema>;
+export type LoginData = z.infer<typeof loginSchema>;
 
 // Extended types with relations
 export type SectionWithPhotos = Section & {

@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { authenticateToken, register, login, getCurrentUser, type AuthRequest } from "./auth";
 import { insertSectionSchema, insertPhotoSchema, insertContactMessageSchema } from "@shared/schema";
 import multer from "multer";
 import sharp from "sharp";
@@ -30,20 +30,19 @@ const uploadsDir = path.join(process.cwd(), 'uploads');
 fs.mkdir(uploadsDir, { recursive: true }).catch(console.error);
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware
-  await setupAuth(app);
+  // Initialize Firebase
+  try {
+    const { initializeFirebase } = await import('./firebase');
+    initializeFirebase();
+    console.log('Firebase initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Firebase:', error);
+  }
 
   // Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
-      res.json(user);
-    } catch (error) {
-      console.error("Error fetching user:", error);
-      res.status(500).json({ message: "Failed to fetch user" });
-    }
-  });
+  app.post('/api/register', register);
+  app.post('/api/login', login);
+  app.get('/api/user', authenticateToken, getCurrentUser);
 
   // Public routes - Gallery
   app.get('/api/sections', async (req, res) => {
@@ -96,8 +95,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(message);
     } catch (error) {
       console.error("Error creating contact message:", error);
-      if (error.name === 'ZodError') {
-        res.status(400).json({ message: "Invalid form data", errors: error.errors });
+      if ((error as any).name === 'ZodError') {
+        res.status(400).json({ message: "Invalid form data", errors: (error as any).errors });
       } else {
         res.status(500).json({ message: "Failed to send message" });
       }
@@ -120,7 +119,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Protected admin routes
-  app.get('/api/admin/stats', isAuthenticated, async (req, res) => {
+  app.get('/api/admin/stats', authenticateToken, async (req: AuthRequest, res) => {
     try {
       const stats = await storage.getStats();
       res.json(stats);
@@ -130,7 +129,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/admin/photos', isAuthenticated, async (req, res) => {
+  app.get('/api/admin/photos', authenticateToken, async (req: AuthRequest, res) => {
     try {
       const photos = await storage.getPhotos();
       res.json(photos);
@@ -140,7 +139,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/admin/sections', isAuthenticated, async (req, res) => {
+  app.get('/api/admin/sections', authenticateToken, async (req: AuthRequest, res) => {
     try {
       const sections = await storage.getSections();
       res.json(sections);
@@ -150,7 +149,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/admin/messages', isAuthenticated, async (req, res) => {
+  app.get('/api/admin/messages', authenticateToken, async (req: AuthRequest, res) => {
     try {
       const messages = await storage.getContactMessages();
       res.json(messages);
@@ -161,22 +160,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Section management
-  app.post('/api/admin/sections', isAuthenticated, async (req, res) => {
+  app.post('/api/admin/sections', authenticateToken, async (req: AuthRequest, res) => {
     try {
       const validatedData = insertSectionSchema.parse(req.body);
       const section = await storage.createSection(validatedData);
       res.status(201).json(section);
     } catch (error) {
       console.error("Error creating section:", error);
-      if (error.name === 'ZodError') {
-        res.status(400).json({ message: "Invalid section data", errors: error.errors });
+      if ((error as any).name === 'ZodError') {
+        res.status(400).json({ message: "Invalid section data", errors: (error as any).errors });
       } else {
         res.status(500).json({ message: "Failed to create section" });
       }
     }
   });
 
-  app.put('/api/admin/sections/:id', isAuthenticated, async (req, res) => {
+  app.put('/api/admin/sections/:id', authenticateToken, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
       const validatedData = insertSectionSchema.partial().parse(req.body);
@@ -184,15 +183,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(section);
     } catch (error) {
       console.error("Error updating section:", error);
-      if (error.name === 'ZodError') {
-        res.status(400).json({ message: "Invalid section data", errors: error.errors });
+      if ((error as any).name === 'ZodError') {
+        res.status(400).json({ message: "Invalid section data", errors: (error as any).errors });
       } else {
         res.status(500).json({ message: "Failed to update section" });
       }
     }
   });
 
-  app.delete('/api/admin/sections/:id', isAuthenticated, async (req, res) => {
+  app.delete('/api/admin/sections/:id', authenticateToken, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
       await storage.deleteSection(id);
@@ -204,21 +203,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Photo upload and management
-  app.post('/api/admin/photos', isAuthenticated, upload.single('photo'), async (req, res) => {
+  app.post('/api/admin/photos', authenticateToken, upload.single('photo'), async (req: AuthRequest, res) => {
     try {
-      if (!req.file) {
+      if (!(req as any).file) {
         return res.status(400).json({ message: "No file uploaded" });
       }
 
       const { title, description, sectionId, tags } = req.body;
+      const file = (req as any).file;
       
       // Generate unique filename
-      const fileExtension = path.extname(req.file.originalname);
+      const fileExtension = path.extname(file.originalname);
       const filename = `${randomUUID()}${fileExtension}`;
       const filepath = path.join(uploadsDir, filename);
 
       // Process image with Sharp (resize and optimize)
-      const imageBuffer = await sharp(req.file.buffer)
+      const imageBuffer = await sharp(file.buffer)
         .resize(2000, 2000, { 
           fit: 'inside',
           withoutEnlargement: true
@@ -239,7 +239,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         title,
         description: description || '',
         filename,
-        originalFilename: req.file.originalname,
+        originalFilename: file.originalname,
         mimeType: 'image/jpeg', // All images are converted to JPEG
         fileSize: imageBuffer.length,
         width: metadata.width || 0,
@@ -258,7 +258,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/admin/photos/:id', isAuthenticated, async (req, res) => {
+  app.put('/api/admin/photos/:id', authenticateToken, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
       const updates = req.body;
@@ -276,7 +276,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete('/api/admin/photos/:id', isAuthenticated, async (req, res) => {
+  app.delete('/api/admin/photos/:id', authenticateToken, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
       
@@ -302,7 +302,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Mark message as read
-  app.patch('/api/admin/messages/:id/read', isAuthenticated, async (req, res) => {
+  app.patch('/api/admin/messages/:id/read', authenticateToken, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
       await storage.markMessageAsRead(id);

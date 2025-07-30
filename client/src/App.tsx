@@ -9,28 +9,56 @@ import Home from "@/pages/Home";
 import Gallery from "@/pages/Gallery";
 import Contact from "@/pages/Contact";
 import AdminDashboard from "@/pages/AdminDashboard";
+import AuthPage from "@/pages/auth-page";
 import NotFound from "@/pages/not-found";
+import { Loader2 } from "lucide-react";
+
+function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthPage />;
+  }
+
+  return <Component />;
+}
 
 function Router() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { user, isLoading } = useAuth();
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+  
   return (
     <Switch>
-      {isLoading || !isAuthenticated ? (
-        <>
-          <Route path="/" component={Landing} />
-          <Route path="/gallery" component={Gallery} />
-          <Route path="/contact" component={Contact} />
-          <Route path="/admin" component={() => <Landing showLogin={true} />} />
-        </>
-      ) : (
-        <>
-          <Route path="/" component={Home} />
-          <Route path="/gallery" component={Gallery} />
-          <Route path="/contact" component={Contact} />
-          <Route path="/admin" component={AdminDashboard} />
-        </>
-      )}
+      {/* Public routes */}
+      <Route path="/gallery" component={Gallery} />
+      <Route path="/contact" component={Contact} />
+      <Route path="/auth" component={AuthPage} />
+      
+      {/* Protected routes */}
+      <Route path="/admin">
+        <ProtectedRoute component={AdminDashboard} />
+      </Route>
+      
+      {/* Home route - different behavior based on auth */}      
+      <Route path="/">
+        {user ? <Home /> : <Landing />}
+      </Route>
+      
       <Route component={NotFound} />
     </Switch>
   );
